@@ -11,16 +11,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.models.task import Task
 
-settings = get_settings()
 
-# Map task_type to limit key and limit value
-LIMITS = {
-    Task.LIKE_POST: settings.daily_limit_likes,
-    Task.FOLLOW_USER: settings.daily_limit_follows,
-    Task.SEND_DM: settings.daily_limit_dms,
-    Task.COMMENT_POST: settings.daily_limit_comments,
-    Task.UPLOAD_POST: 10,  # arbitrary
-}
+def _get_limit(task_type: str) -> int | None:
+    """Return daily limit for task_type (fresh from settings). None = no limit."""
+    settings = get_settings()
+    limits = {
+        Task.LIKE_POST: settings.daily_limit_likes,
+        Task.FOLLOW_USER: settings.daily_limit_follows,
+        Task.SEND_DM: settings.daily_limit_dms,
+        Task.COMMENT_POST: settings.daily_limit_comments,
+        Task.UPLOAD_POST: 10,
+        Task.VIEW_REEL: getattr(settings, "daily_limit_reel_views", 9999),
+    }
+    return limits.get(task_type)
 
 
 async def get_today_count(
@@ -47,7 +50,7 @@ async def can_perform_action(
     task_type: str,
 ) -> bool:
     """Check if account is within daily limit for this task type."""
-    limit = LIMITS.get(task_type)
+    limit = _get_limit(task_type)
     if limit is None:
         return True
     count = await get_today_count(db, account_id, task_type)

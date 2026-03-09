@@ -84,6 +84,7 @@ From the project root:
 - `make frontend` – start Next.js (foreground)  
 - `make register` – wait for backend, then POST `/auth/register` (default email/password in Makefile)  
 - `make run` – start backend in background, wait for health, then run register  
+- `make test-backend` – run backend smoke tests  
 
 Override email/password:
 
@@ -102,6 +103,16 @@ cd backend && source .venv/bin/activate && playwright install firefox
 ```
 
 To use Chromium instead, set in backend `.env`: `PLAYWRIGHT_BROWSER=chromium` and run `playwright install chromium`.
+
+## Anti-ban and safety
+
+See **[docs/ANTI_BAN_AND_SAFETY.md](docs/ANTI_BAN_AND_SAFETY.md)** for proxy, device fingerprint, warm-up, action limits, block detection, and bulk-follow behaviour. After pulling, run migrations so new account columns exist:
+
+```bash
+cd backend && source .venv/bin/activate && PYTHONPATH=. alembic upgrade head
+```
+
+(SQLite: set `USE_SQLITE=true` and ensure `database_url` in config points to your SQLite file, or use `get_database_url()` in `alembic/env.py`.)
 
 ## Environment
 

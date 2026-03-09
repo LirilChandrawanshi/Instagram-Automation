@@ -7,6 +7,7 @@ const nav = [
   { name: "Dashboard", href: "/dashboard" },
   { name: "Accounts", href: "/accounts" },
   { name: "Automation", href: "/automation" },
+  { name: "Instagram API", href: "/instagram-api" },
   { name: "Analytics", href: "/analytics" },
 ];
 

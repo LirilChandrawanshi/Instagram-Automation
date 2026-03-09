@@ -21,7 +21,7 @@ from app.models.instagram_account import InstagramAccount
 
 settings = get_settings()
 BASE_URL = "https://www.instagram.com"
-DEFAULT_TIMEOUT_MS = 30_000
+DEFAULT_TIMEOUT_MS = 90_000  # 1 min 30 sec
 
 
 _SAME_SITE_MAP = {
@@ -135,12 +135,30 @@ async def get_context(
 
 
 async def ensure_logged_in(page: Page, account: InstagramAccount) -> bool:
-    """Navigate to Instagram and return True if logged in (no login form)."""
+    """Navigate to Instagram and return True if logged in. Waits for redirect/cookies then checks."""
     await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
-    await page.wait_for_timeout(2000)
-    # Logged-in home has feed or redirect; login page has username input
+    # Instagram often shows login first then redirects after cookies; wait longer for that
+    await page.wait_for_timeout(7000)
+    url = page.url or ""
+    # Clear sign: still on login page = not logged in
+    if "accounts/login" in url or "accounts/login/" in url:
+        return False
+    # Positive checks for logged-in (any one is enough)
+    if await page.locator('nav a[href="/"]').count() > 0:
+        return True
+    if await page.locator('a[href="/"]').count() > 0:
+        return True
+    if await page.get_by_role("link", name="Home").count() > 0:
+        return True
+    # Home icon (aria-label)
+    if await page.locator('a[aria-label="Home"], a[aria-label="Home (current tab)"]').count() > 0:
+        return True
+    # Login form present = not logged in
     login_input = await page.query_selector('input[name="username"]')
-    return login_input is None
+    if login_input:
+        return False
+    # Not on login URL and no login form = treat as logged in (feed/challenge/different UI)
+    return True
 
 
 async def scroll_page(page: Page, direction: str = "down", amount: Optional[int] = None) -> None:

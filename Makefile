@@ -7,7 +7,7 @@ API_URL ?= http://localhost:8000
 REGISTER_EMAIL ?= liril625@gmail.com
 REGISTER_PASSWORD ?= 123456
 
-.PHONY: install-backend install-frontend migrate backend frontend worker register run health restart stop
+.PHONY: install-backend install-frontend migrate backend frontend worker register run dev stop health test-backend
 
 # Install backend deps (venv + pip)
 install-backend:
@@ -54,6 +54,25 @@ run:
 	@chmod +x scripts/start-and-register.sh 2>/dev/null || true
 	@./scripts/start-and-register.sh
 
+# Start both backend and frontend together (foreground)
+dev:
+	@echo "Starting backend and frontend..."
+	@trap 'kill 0' EXIT; \
+	(cd $(BACKEND_DIR) && PYTHONPATH=. .venv/bin/python run.py) & \
+	(cd $(FRONTEND_DIR) && npm run dev) & \
+	wait
+
+# Stop all running dev processes
+stop:
+	@echo "Stopping backend and frontend..."
+	@-pkill -f "$(BACKEND_DIR)/run.py" 2>/dev/null || true
+	@-pkill -f "next dev" 2>/dev/null || true
+	@echo "Stopped."
+
 # Check backend health
 health:
 	@curl -sf "$(API_URL)/health" && echo " OK" || (echo "Backend not reachable at $(API_URL)"; exit 1)
+
+# Run backend tests
+test-backend:
+	cd $(BACKEND_DIR) && .venv/bin/python -m pytest -q

@@ -24,6 +24,7 @@ class Task(Base):
     SEND_DM = "SEND_DM"
     COMMENT_POST = "COMMENT_POST"
     UPLOAD_POST = "UPLOAD_POST"
+    VIEW_REEL = "VIEW_REEL"
 
     id: Mapped[UUID] = uuid_pk()
     account_id: Mapped[UUID] = uuid_fk(ForeignKey("instagram_accounts.id", ondelete="CASCADE"), nullable=False)
@@ -31,6 +32,7 @@ class Task(Base):
     target: Mapped[str] = mapped_column(Text, nullable=True)  # URL, username, or JSON
     payload: Mapped[Optional[dict]] = json_column(nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="pending")  # pending, running, completed, failed
+    result_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # exact reason for success or failure
     scheduled_time: Mapped[Optional[datetime]] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = created_at()
     completed_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)

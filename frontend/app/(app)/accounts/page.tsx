@@ -12,12 +12,14 @@ export default function AccountsPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [showGuide, setShowGuide] = useState(false);
+  const [checkingId, setCheckingId] = useState<string | null>(null);
+  const [sessionResult, setSessionResult] = useState<Record<string, { valid: boolean; message: string }>>({});
 
   const fetchAccounts = () => {
     accounts
       .list()
-      .then((res) => setList(res.data))
-      .catch(() => setList([]))
+      .then((res) => setList(res.data ?? []))
+      .catch(() => { /* keep previous list on error */ })
       .finally(() => setLoading(false));
   };
 
@@ -45,10 +47,11 @@ export default function AccountsPage() {
         setConnecting(false);
         return;
       }
-      await accounts.connect({ username, session_cookie: cookiePayload });
+      const res = await accounts.connect({ username, session_cookie: cookiePayload });
       setUsername("");
       setSessionCookie("");
-      setSuccess(`@${username} connected successfully! 🎉`);
+      setSuccess(`@${res.data.username} connected successfully! 🎉`);
+      setList((prev) => [res.data, ...prev]);
       fetchAccounts();
     } catch (err: unknown) {
       const msg =
@@ -68,6 +71,19 @@ export default function AccountsPage() {
       fetchAccounts();
     } catch {
       setError("Failed to delete");
+    }
+  };
+
+  const handleCheckSession = async (id: string) => {
+    setCheckingId(id);
+    setError("");
+    try {
+      const res = await accounts.checkSession(id);
+      setSessionResult((prev) => ({ ...prev, [id]: res.data }));
+    } catch {
+      setSessionResult((prev) => ({ ...prev, [id]: { valid: false, message: "Check failed" } }));
+    } finally {
+      setCheckingId(null);
     }
   };
 
@@ -252,15 +268,30 @@ export default function AccountsPage() {
                       />
                       {acc.status}
                     </p>
+                    {sessionResult[acc.id] && (
+                      <p className={`mt-1 text-xs ${sessionResult[acc.id].valid ? "text-emerald-600" : "text-red-600"}`}>
+                        {sessionResult[acc.id].valid ? "✓ " : ""}{sessionResult[acc.id].message}
+                      </p>
+                    )}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => handleDelete(acc.id)}
-                  className="rounded-lg px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50"
-                >
-                  Remove
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleCheckSession(acc.id)}
+                    disabled={checkingId === acc.id}
+                    className="rounded-lg px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-60"
+                  >
+                    {checkingId === acc.id ? "Checking…" : "Check cookies"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(acc.id)}
+                    className="rounded-lg px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50"
+                  >
+                    Remove
+                  </button>
+                </div>
               </li>
             ))}
           </ul>

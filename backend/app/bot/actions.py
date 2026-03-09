@@ -2,11 +2,42 @@
 Instagram automation actions: like, follow, comment, DM, upload.
 Uses InstagramClient (Playwright), random delays, and scroll simulation.
 """
+import re
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
+from app.config import get_settings, get_testing_mode
 from app.models.instagram_account import InstagramAccount
 from app.bot.instagram_client import InstagramClient, BASE_URL
 from app.utils.random_delay import async_random_delay
+
+
+class ActionBlockedError(RuntimeError):
+    """Raised when Instagram shows action block / try again later."""
+
+    pass
+
+
+async def _action_delay() -> None:
+    """Human-like delay between actions (config: 20-60s default). Short when testing mode."""
+    if get_testing_mode():
+        await async_random_delay(0, 2)
+        return
+    s = get_settings()
+    min_s = getattr(s, "delay_between_actions_min_sec", 20)
+    max_s = getattr(s, "delay_between_actions_max_sec", 60)
+    await async_random_delay(min_s, max_s)
+
+
+async def _check_action_block(page: Page) -> None:
+    """Raise ActionBlockedError if page shows block message."""
+    try:
+        content = await page.content()
+        if "Action blocked" in content or "Try again later" in content:
+            raise ActionBlockedError("Action blocked by Instagram. Account paused for 24h.")
+    except ActionBlockedError:
+        raise
+    except Exception:
+        pass
 
 
 async def _wait_optional(page: Page, selector: str, timeout: float = 5000) -> bool:
@@ -23,12 +54,11 @@ async def like_post(account: InstagramAccount, post_url: str) -> None:
     async with InstagramClient(account) as client:
         if not await client.ensure_logged_in():
             raise RuntimeError("Not logged in to Instagram")
-        await async_random_delay(2, 5)
+        await _action_delay()
 
         await client.page.goto(post_url, wait_until="domcontentloaded")
         await async_random_delay(1, 3)
 
-        # Like: aria-label "Like" on SVG, or button containing it
         like_selectors = [
             'section span svg[aria-label="Like"]',
             'svg[aria-label="Like"]',
@@ -45,7 +75,20 @@ async def like_post(account: InstagramAccount, post_url: str) -> None:
         if not clicked:
             raise RuntimeError("Like button not found; post may already be liked or selector changed")
 
-        await async_random_delay(2, 5)
+        await _check_action_block(client.page)
+        await _action_delay()
+
+
+def _follow_button_variants(page: Page):
+    """Yield (locator, is_follow_clickable) for Follow / Requested / Following."""
+    # Exact role+name (primary)
+    yield page.get_by_role("button", name="Follow"), True
+    yield page.get_by_role("button", name="Requested"), False
+    yield page.get_by_role("button", name="Following"), False
+    # Regex for locale or extra text (e.g. "Seguir", "Follow back")
+    yield page.get_by_role("button", name=re.compile(r"^Follow\b", re.I)), True
+    yield page.get_by_role("button", name=re.compile(r"Requested", re.I)), False
+    yield page.get_by_role("button", name=re.compile(r"Following", re.I)), False
 
 
 async def follow_user(account: InstagramAccount, username: str) -> None:
@@ -53,56 +96,206 @@ async def follow_user(account: InstagramAccount, username: str) -> None:
     async with InstagramClient(account) as client:
         if not await client.ensure_logged_in():
             raise RuntimeError("Not logged in to Instagram")
-        await async_random_delay(2, 5)
+        await _action_delay()
 
         await client.page.goto(f"{BASE_URL}/{username.strip()}/", wait_until="domcontentloaded")
-        await async_random_delay(1, 3)
+        await async_random_delay(2, 4)
 
-        # Optional scroll to load profile
+        # Wait for profile section (follow button or following state)
+        for _ in range(8):
+            follow_btn = client.page.get_by_role("button", name="Follow")
+            following_btn = client.page.get_by_role("button", name="Following")
+            if await follow_btn.count() > 0 or await following_btn.count() > 0:
+                break
+            await async_random_delay(0.8, 1.2)
         await client.scroll_down(150)
         await async_random_delay(0.5, 1)
 
-        follow_btn = client.page.get_by_role("button", name="Follow")
-        if await follow_btn.count() > 0:
-            await follow_btn.first.click()
-        else:
-            # "Requested" or "Following" = no-op, not an error
-            requested = client.page.get_by_role("button", name="Requested")
+        clicked = False
+        for locator, should_click in _follow_button_variants(client.page):
+            if await locator.count() > 0:
+                if should_click:
+                    await locator.first.click()
+                    clicked = True
+                break
+        if not clicked and await client.page.get_by_role("button", name="Follow").count() == 0:
             following = client.page.get_by_role("button", name="Following")
-            if await requested.count() == 0 and await following.count() == 0:
+            requested = client.page.get_by_role("button", name="Requested")
+            if await following.count() == 0 and await requested.count() == 0:
                 raise RuntimeError("Follow button not found; may already follow this user")
 
-        await async_random_delay(2, 5)
+        await _check_action_block(client.page)
+        await _action_delay()
 
 
 async def comment_post(account: InstagramAccount, post_url: str, message: str) -> None:
-    """Open post and submit comment."""
+    """Open post/reel and submit comment."""
+    import logging
+    log = logging.getLogger(__name__)
+
     async with InstagramClient(account) as client:
         if not await client.ensure_logged_in():
             raise RuntimeError("Not logged in to Instagram")
-        await async_random_delay(2, 5)
+        await _action_delay()
 
         await client.page.goto(post_url, wait_until="domcontentloaded")
-        await async_random_delay(1, 3)
+        await async_random_delay(3, 5)
 
+        # Wait for page to fully settle (Instagram loads dynamically)
+        await client.page.wait_for_timeout(3000)
+
+        # Step 1: Click the Comment icon to open / focus the comment area.
+        # On reels this is essential — the input isn't visible until you click it.
+        comment_icon_clicked = False
+        comment_icon_selectors = [
+            'svg[aria-label="Comment"]',
+            '[aria-label="Comment"]',
+            'svg[aria-label="Comment on this"]',
+        ]
+        for sel in comment_icon_selectors:
+            try:
+                el = await client.page.query_selector(sel)
+                if el:
+                    await el.click()
+                    comment_icon_clicked = True
+                    log.info("Clicked comment icon: %s", sel)
+                    await async_random_delay(1, 2)
+                    break
+            except Exception:
+                continue
+
+        # Step 2: Also try clicking any "Add a comment…" placeholder text
+        if not comment_icon_clicked:
+            placeholder_locator = client.page.get_by_text(re.compile(r"Add a comment", re.I))
+            if await placeholder_locator.count() > 0:
+                await placeholder_locator.first.click()
+                log.info("Clicked 'Add a comment' placeholder text")
+                await async_random_delay(1, 2)
+
+        # Step 3: Find the actual comment input element.
+        # Instagram uses <input> for reels, <textarea> or contenteditable div for posts.
         comment_selectors = [
+            'input[placeholder*="comment" i]',                       # reels use <input>
+            'input[placeholder="Add a comment…"]',                   # reel exact match
+            'input[placeholder="Add a comment..."]',
+            'div[role="textbox"][contenteditable="true"]',           # modern contenteditable
+            'div[aria-label="Add a comment…"][contenteditable]',     # aria-label variant
+            'div[aria-label="Add a comment..."][contenteditable]',
+            'form div[contenteditable="true"]',                      # inside form
+            'textarea[placeholder="Add a comment…"]',                # legacy
             'textarea[placeholder="Add a comment..."]',
+            'textarea[aria-label="Add a comment…"]',
             'textarea[aria-label="Add a comment..."]',
-            "textarea[placeholder*='comment']",
+            "textarea[placeholder*='comment' i]",
+            'div[contenteditable="true"]',                           # broadest fallback
         ]
         comment_el = None
         for sel in comment_selectors:
-            if await _wait_optional(client.page, sel, timeout=3000):
+            if await _wait_optional(client.page, sel, timeout=2000):
                 comment_el = await client.page.query_selector(sel)
                 if comment_el:
+                    log.info("Found comment input: %s", sel)
                     break
-        if not comment_el:
-            raise RuntimeError("Comment input not found")
 
-        await comment_el.fill(message)
+        # Last resort: use Playwright's get_by_placeholder
+        if not comment_el:
+            pl = client.page.get_by_placeholder(re.compile(r"comment", re.I))
+            if await pl.count() > 0:
+                comment_el = await pl.first.element_handle()
+                log.info("Found comment input via get_by_placeholder")
+
+        if not comment_el:
+            # Debug: save screenshot and page info for troubleshooting
+            debug_path = "/tmp/ig_comment_debug.png"
+            html_path = "/tmp/ig_comment_debug.html"
+            try:
+                await client.page.screenshot(path=debug_path, full_page=False)
+                html = await client.page.content()
+                with open(html_path, "w", encoding="utf-8") as f:
+                    f.write(html)
+                log.error("Comment input not found. Screenshot: %s, HTML: %s, URL: %s",
+                          debug_path, html_path, client.page.url)
+            except Exception as e:
+                log.error("Failed to save debug info: %s", e)
+            raise RuntimeError(
+                f"Comment input not found. Debug screenshot saved to {debug_path}"
+            )
+
+        # Step 4: Click to activate the input, then re-query.
+        # Instagram's React swaps the placeholder <input> for a new active element
+        # when clicked, so the original element handle becomes detached.
+        try:
+            await comment_el.click()
+        except Exception:
+            pass  # element may detach during click — that's expected
         await async_random_delay(0.5, 1)
-        await client.page.keyboard.press("Enter")
-        await async_random_delay(2, 5)
+
+        # Re-query for the now-active comment input (after React re-render)
+        active_el = None
+        active_selectors = [
+            'input[placeholder*="comment" i]:focus',
+            'input[placeholder*="comment" i]',
+            'textarea:focus',
+            'div[role="textbox"][contenteditable="true"]',
+            'div[contenteditable="true"]:focus',
+            'textarea[placeholder*="comment" i]',
+        ]
+        for sel in active_selectors:
+            active_el = await client.page.query_selector(sel)
+            if active_el:
+                log.info("Re-queried active comment input: %s", sel)
+                break
+
+        # Fallback: try the Playwright locator (auto re-queries)
+        if not active_el:
+            pl = client.page.get_by_placeholder(re.compile(r"comment", re.I))
+            if await pl.count() > 0:
+                active_el = await pl.first.element_handle()
+                log.info("Re-queried via get_by_placeholder")
+
+        if not active_el:
+            raise RuntimeError("Comment input lost after activation click")
+
+        # Enter the text
+        tag = await active_el.evaluate("el => el.tagName.toLowerCase()")
+        if tag in ("input", "textarea"):
+            await active_el.fill(message)
+        else:
+            await active_el.click()
+            await client.page.keyboard.type(message, delay=50)
+        await async_random_delay(0.5, 1)
+
+        # Step 5: Submit — Click "Post" button (Enter doesn't submit on Instagram)
+        post_btn = client.page.get_by_role("button", name=re.compile(r"^Post$", re.I))
+        if await post_btn.count() > 0:
+            await post_btn.first.click()
+        else:
+            # Fallback: try Enter key
+            await client.page.keyboard.press("Enter")
+
+        await async_random_delay(1, 2)
+        await _check_action_block(client.page)
+        await _action_delay()
+
+
+async def view_reel(account: InstagramAccount, reel_url: str) -> None:
+    """Open reel URL and let it play for several seconds to count as a view. Uses random delay."""
+    import asyncio
+    import random
+    async with InstagramClient(account) as client:
+        if not await client.ensure_logged_in():
+            raise RuntimeError("Not logged in to Instagram")
+        await _action_delay()
+
+        await client.page.goto(reel_url, wait_until="domcontentloaded")
+        await async_random_delay(2, 4)
+
+        # Let the reel play long enough to count as a view (Instagram typically counts after ~3s)
+        watch_sec = 5 if get_testing_mode() else random.randint(5, 9)
+        await asyncio.sleep(watch_sec)
+
+        await _check_action_block(client.page)
+        await _action_delay()
 
 
 async def send_dm(account: InstagramAccount, username: str, message: str) -> None:
@@ -110,7 +303,7 @@ async def send_dm(account: InstagramAccount, username: str, message: str) -> Non
     async with InstagramClient(account) as client:
         if not await client.ensure_logged_in():
             raise RuntimeError("Not logged in to Instagram")
-        await async_random_delay(2, 5)
+        await _action_delay()
 
         await client.page.goto(f"{BASE_URL}/direct/new/", wait_until="domcontentloaded")
         await async_random_delay(2, 4)
@@ -157,7 +350,8 @@ async def send_dm(account: InstagramAccount, username: str, message: str) -> Non
             raise RuntimeError("Message input not found")
         await msg_el.fill(message)
         await client.page.keyboard.press("Enter")
-        await async_random_delay(2, 5)
+        await _check_action_block(client.page)
+        await _action_delay()
 
 
 async def upload_post(account: InstagramAccount, image_path: str, caption: str) -> None:
@@ -165,7 +359,7 @@ async def upload_post(account: InstagramAccount, image_path: str, caption: str) 
     async with InstagramClient(account) as client:
         if not await client.ensure_logged_in():
             raise RuntimeError("Not logged in to Instagram")
-        await async_random_delay(2, 5)
+        await _action_delay()
 
         await client.page.goto(f"{BASE_URL}/", wait_until="domcontentloaded")
         await async_random_delay(1, 2)

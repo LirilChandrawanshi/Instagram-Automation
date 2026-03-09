@@ -1,7 +1,7 @@
 """
 JWT creation/validation and password hashing.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
 from uuid import UUID
 
@@ -26,7 +26,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_access_token(subject: Union[str, UUID]) -> str:
     """Create JWT with subject (user id) and expiry."""
-    expire = datetime.utcnow() + timedelta(minutes=settings.jwt_expire_minutes)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_expire_minutes)
     to_encode = {"sub": str(subject), "exp": expire}
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 

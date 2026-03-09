@@ -19,9 +19,9 @@ import app.models  # noqa: F401 — register all models
 config = context.config
 target_metadata = Base.metadata
 
-# Override sqlalchemy.url from application settings
+# Override sqlalchemy.url from application settings (respects USE_SQLITE)
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.database_url)
+config.set_main_option("sqlalchemy.url", settings.get_database_url())
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

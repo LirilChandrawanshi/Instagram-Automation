@@ -24,6 +24,7 @@ const taskTypeLabels: Record<string, string> = {
   SEND_DM: "Send DM",
   COMMENT_POST: "Comment",
   UPLOAD_POST: "Upload post",
+  VIEW_REEL: "View reel",
 };
 
 const statusColors: Record<string, string> = {
@@ -54,6 +55,9 @@ export default function TaskTable({ tasks, loading, onDelete }: TaskTableProps) 
         <thead>
           <tr>
             <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500">
+              Account
+            </th>
+            <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500">
               Type
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500">
@@ -61,6 +65,9 @@ export default function TaskTable({ tasks, loading, onDelete }: TaskTableProps) 
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500">
               Status
+            </th>
+            <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500">
+              Result / Message
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500">
               Scheduled
@@ -73,6 +80,9 @@ export default function TaskTable({ tasks, loading, onDelete }: TaskTableProps) 
         <tbody className="divide-y divide-slate-200 bg-white">
           {tasks.map((task) => (
             <tr key={task.id}>
+              <td className="whitespace-nowrap px-6 py-4 text-sm font-medium text-slate-900">
+                {task.account_username ? `@${task.account_username}` : task.account_id || "—"}
+              </td>
               <td className="whitespace-nowrap px-6 py-4 text-sm font-medium text-slate-900">
                 {taskTypeLabels[task.task_type] ?? task.task_type}
               </td>
@@ -87,6 +97,12 @@ export default function TaskTable({ tasks, loading, onDelete }: TaskTableProps) 
                 >
                   {task.status}
                 </span>
+              </td>
+              <td className="max-w-[240px] px-6 py-4 text-sm text-slate-600">
+                {task.result_message ??
+                  (task.status === "failed" && task.payload && typeof task.payload.error === "string"
+                    ? task.payload.error
+                    : null) ?? "—"}
               </td>
               <td className="whitespace-nowrap px-6 py-4 text-sm text-slate-500">
                 {task.scheduled_time ? formatLocal(task.scheduled_time) : "ASAP"}
