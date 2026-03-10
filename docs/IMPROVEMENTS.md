@@ -4,11 +4,14 @@ Suggestions to harden, scale, and maintain the Instagram Automation platform. It
 
 ---
 
-## Already applied (this session)
+## Already applied
 
 - **JWT expiry uses timezone-aware datetime** – Replaced deprecated `datetime.utcnow()` in `app/core/security.py` with `datetime.now(timezone.utc)` for Python 3.12+ compatibility.
 - **Rate limiter uses fresh settings** – `app/utils/rate_limiter.py` now reads limits from `get_settings()` at check time so env/test overrides (e.g. `TESTING_MODE`) take effect without restart.
 - **Startup and scheduler logging** – Lifespan table-ensure steps and the inline scheduler loop log warnings on failure instead of failing silently.
+- **CORS from env** – `CORS_ORIGINS` (comma-separated) in `app/config.py`; production can set allowed front-end origins without code change.
+- **Global exception handler** – Unhandled exceptions are logged and return a safe 500; `HTTPException` and `RequestValidationError` are re-raised so 4xx/422 behave as before.
+- **Deeper health check** – `GET /health?deep=1` probes the database and returns `database: ok` or `database: error` with `status: degraded` for readiness probes.
 
 ---
 

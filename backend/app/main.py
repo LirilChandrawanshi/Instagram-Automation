@@ -6,13 +6,14 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-
-logger = logging.getLogger(__name__)
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.database import (
+    engine,
     init_db,
     ensure_task_result_message_column,
     ensure_comment_dm_sent_table,
@@ -28,6 +29,7 @@ from app.api.instagram_webhooks import router as instagram_webhooks_router
 from app.api.instagram_graph import router as instagram_graph_router
 from app.services.scheduler_service import SchedulerService
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 SCHEDULER_INTERVAL_SEC = 60
 
@@ -74,9 +76,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()] or ["http://localhost:3000"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -91,7 +94,28 @@ app.include_router(instagram_webhooks_router)
 app.include_router(instagram_graph_router)
 
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Log unhandled exceptions and return a safe 500 (detail only when debug)."""
+    if isinstance(exc, (HTTPException, RequestValidationError)):
+        raise exc
+    logger.exception("Unhandled exception: %s", exc)
+    detail = str(exc) if settings.debug else "Internal server error"
+    return JSONResponse(status_code=500, content={"detail": detail})
+
+
 @app.get("/health")
-async def health() -> dict:
-    """Health check for Docker/load balancers."""
-    return {"status": "ok"}
+async def health(deep: bool = False) -> dict:
+    """Health check for Docker/load balancers. Use ?deep=1 to probe DB."""
+    out: dict = {"status": "ok"}
+    if deep:
+        try:
+            from sqlalchemy import text
+            async with engine.begin() as conn:
+                await conn.execute(text("SELECT 1"))
+            out["database"] = "ok"
+        except Exception as e:
+            logger.warning("Health deep check (db) failed: %s", e)
+            out["database"] = "error"
+            out["status"] = "degraded"
+    return out

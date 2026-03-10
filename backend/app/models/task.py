@@ -25,6 +25,8 @@ class Task(Base):
     COMMENT_POST = "COMMENT_POST"
     UPLOAD_POST = "UPLOAD_POST"
     VIEW_REEL = "VIEW_REEL"
+    VIEW_STORY = "VIEW_STORY"
+    UPLOAD_REEL = "UPLOAD_REEL"
 
     id: Mapped[UUID] = uuid_pk()
     account_id: Mapped[UUID] = uuid_fk(ForeignKey("instagram_accounts.id", ondelete="CASCADE"), nullable=False)

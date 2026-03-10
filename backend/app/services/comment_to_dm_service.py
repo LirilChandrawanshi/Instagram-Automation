@@ -81,7 +81,11 @@ async def process_comment_events(events: list) -> None:
                     await reply_to_comment(comment_id, "We've sent it to your DMs! Check your inbox.")
                 except Exception:
                     pass
-                db.add(CommentDMSent(comment_id=comment_id))
+                db.add(CommentDMSent(
+                    comment_id=comment_id,
+                    comment_text=text[:2000] if text else None,
+                    media_id=str(media_id) if media_id else None,
+                ))
                 await db.commit()
         except DatabaseError as e:
             logger.warning("Comment-to-DM dedup/insert failed for %s: %s", comment_id, e)

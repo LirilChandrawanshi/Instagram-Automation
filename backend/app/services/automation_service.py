@@ -2,9 +2,12 @@
 Orchestrates bot actions: load task/account, check limits, run action, update status.
 Used by the Celery worker. Enforces one task per account at a time and account pause.
 """
+import os
+import tempfile
 from datetime import datetime, timezone
 from uuid import UUID
 
+import httpx
 from sqlalchemy import select, update
 from sqlalchemy.exc import DatabaseError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +25,9 @@ from app.bot.actions import (
     comment_post,
     send_dm,
     upload_post,
+    upload_reel,
     view_reel,
+    view_story,
     ActionBlockedError,
 )
 from app.models.task import Task as TaskModel
@@ -30,6 +35,53 @@ from app.models.task import Task as TaskModel
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+async def _download_media_to_temp(media_url: str) -> str:
+    """Download media from URL to a temp file; return local path. If url is a local path, return as-is if file exists."""
+    if not media_url or not isinstance(media_url, str):
+        raise ValueError("media_url required")
+    url = media_url.strip()
+    if url.startswith("/") and not url.startswith("//"):
+        # Relative path (e.g. from our upload endpoint) - resolve relative to cwd or backend root
+        path = os.path.abspath(url.lstrip("/"))
+        if os.path.isfile(path):
+            return path
+        path = os.path.join(os.getcwd(), url.lstrip("/"))
+        if os.path.isfile(path):
+            return path
+        raise FileNotFoundError(f"Local media path not found: {url}")
+    if not url.startswith("http://") and not url.startswith("https://"):
+        if os.path.isfile(url):
+            return url
+        raise ValueError("media_url must be http(s) URL or existing local path")
+    async with httpx.AsyncClient() as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        ext = ".jpg"
+        if "image/" in (r.headers.get("content-type") or ""):
+            ext = ".jpg"
+        elif "video/" in (r.headers.get("content-type") or ""):
+            ext = ".mp4"
+        suf = ext
+        f = tempfile.NamedTemporaryFile(delete=False, suffix=suf)
+        f.write(r.content)
+        f.close()
+        return f.name
+
+
+def _resolve_media_path(media_path: str) -> str:
+    """Resolve relative media_path (e.g. uploads/xxx) to absolute file path."""
+    p = media_path.strip()
+    if os.path.isabs(p) and os.path.isfile(p):
+        return p
+    if os.path.isfile(p):
+        return os.path.abspath(p)
+    for base in [os.getcwd(), os.path.join(os.path.dirname(__file__), "..")]:
+        full = os.path.join(base, p)
+        if os.path.isfile(full):
+            return os.path.abspath(full)
+    raise FileNotFoundError(f"Media file not found: {p}")
 
 
 async def _is_account_busy(db: AsyncSession, account_id: object, exclude_task_id: object) -> bool:
@@ -52,6 +104,8 @@ def _success_message(task_type: str) -> str:
         TaskModel.SEND_DM: "DM sent",
         TaskModel.UPLOAD_POST: "Post uploaded",
         TaskModel.VIEW_REEL: "Reel viewed",
+        TaskModel.VIEW_STORY: "Story viewed",
+        TaskModel.UPLOAD_REEL: "Reel uploaded",
     }.get(task_type, "Completed")
 
 
@@ -67,7 +121,9 @@ def _warm_up_allows_task(account: InstagramAccount, task_type: str):
         conn = conn.replace(tzinfo=timezone.utc)
     days = (now - conn).days
     if days < 2:
-        return False, "Account in warm-up (Day 1-2): only scroll/stories allowed"
+        if task_type != TaskModel.VIEW_STORY:
+            return False, "Account in warm-up (Day 1-2): only scroll/stories allowed"
+        return True, ""
     if days < 5:
         if task_type not in (TaskModel.LIKE_POST, TaskModel.VIEW_REEL):
             return False, "Account in warm-up (Day 3-5): only likes and reel views allowed"
@@ -192,11 +248,26 @@ class AutomationService:
                 msg = (task.payload or {}).get("message", "")
                 await send_dm(account, task.target, msg)
             elif task.task_type == TaskModel.UPLOAD_POST:
-                path = (task.payload or {}).get("image_path", "")
+                path = (task.payload or {}).get("media_path") or (task.payload or {}).get("image_path", "")
                 caption = (task.payload or {}).get("caption", "")
+                if (task.payload or {}).get("media_url"):
+                    path = await _download_media_to_temp((task.payload or {}).get("media_url"))
+                elif path:
+                    path = _resolve_media_path(path)
                 await upload_post(account, path, caption)
+            elif task.task_type == TaskModel.UPLOAD_REEL:
+                path = (task.payload or {}).get("media_path")
+                media_url = (task.payload or {}).get("media_url")
+                if media_url:
+                    path = await _download_media_to_temp(media_url)
+                elif path:
+                    path = _resolve_media_path(path)
+                caption = (task.payload or {}).get("caption", "")
+                await upload_reel(account, path, caption)
             elif task.task_type == TaskModel.VIEW_REEL:
                 await view_reel(account, task.target)
+            elif task.task_type == TaskModel.VIEW_STORY:
+                await view_story(account, task.target)
             else:
                 raise ValueError(f"Unknown task type: {task.task_type}")
 

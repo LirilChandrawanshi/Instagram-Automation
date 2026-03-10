@@ -1,12 +1,14 @@
 """
-Tasks API: create, list, delete automation tasks.
+Tasks API: create, list, delete automation tasks; upload media; bulk schedule posts/reels.
 """
+import os
 import random
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +24,8 @@ from app.schemas.task import (
     BulkLikeCreate,
     BulkCommentCreate,
     BulkViewReelCreate,
+    BulkViewStoryCreate,
+    BulkSchedulePostsCreate,
 )
 from app.core.deps import get_current_user, normalize_id
 from app.services.scheduler_service import SchedulerService
@@ -77,13 +81,13 @@ async def bulk_follow(
     target = payload.target.strip().lstrip("@")
     if not target:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Target username required")
+    testing = get_testing_mode()
     created = []
     now = datetime.now(timezone.utc)
     for account_id in account_ids:
-        if not await can_perform_action(db, account_id, Task.FOLLOW_USER):
+        if not testing and not await can_perform_action(db, account_id, Task.FOLLOW_USER):
             continue
-        delta_sec = random.randint(0, 24 * 3600)
-        scheduled_time = now + timedelta(seconds=delta_sec)
+        scheduled_time = None if testing else now + timedelta(seconds=random.randint(0, 24 * 3600))
         task_create = TaskCreate(
             account_id=account_id,
             task_type=Task.FOLLOW_USER,
@@ -206,6 +210,114 @@ async def bulk_view_reel(
             )
             task = await SchedulerService.create_and_enqueue(db, task_create)
             created.append(task)
+    return [TaskResponse.model_validate(t) for t in created]
+
+
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
+
+
+@router.post("/upload-media")
+async def upload_media(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Upload image or video for scheduled post/reel. Returns media_path to use in task payload."""
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    ext = ".jpg"
+    ct = (file.content_type or "").lower()
+    if "video" in ct or file.filename and any(file.filename.lower().endswith(e) for e in (".mp4", ".mov", ".webm")):
+        ext = ".mp4"
+    name = f"{uuid.uuid4().hex}{ext}"
+    path = os.path.join(UPLOAD_DIR, name)
+    content = await file.read()
+    with open(path, "wb") as f:
+        f.write(content)
+    relative = f"uploads/{name}"
+    return {"media_path": relative, "media_url": None}
+
+
+@router.post("/bulk-schedule-posts", response_model=list[TaskResponse])
+async def bulk_schedule_posts(
+    payload: BulkSchedulePostsCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[TaskResponse]:
+    """Create one UPLOAD_POST or UPLOAD_REEL task per item. Each item has scheduled_time, media_type, media_url or media_path, caption."""
+    result = await db.execute(
+        select(InstagramAccount.id).where(
+            InstagramAccount.id == normalize_id(payload.account_id),
+            InstagramAccount.user_id == normalize_id(user.id),
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+    account_id = normalize_id(payload.account_id)
+    created = []
+    testing = get_testing_mode()
+    now = datetime.now(timezone.utc)
+    for item in payload.items:
+        media_type = (item.media_type or "image").lower()
+        task_type = Task.UPLOAD_REEL if media_type == "video" else Task.UPLOAD_POST
+        if not testing and not await can_perform_action(db, account_id, task_type):
+            continue
+        st = item.scheduled_time
+        if st.tzinfo is None:
+            st = st.replace(tzinfo=timezone.utc)
+        scheduled_time = None if testing else st
+        task_payload = {
+            "caption": item.caption or "",
+            "media_type": media_type,
+        }
+        if item.media_path:
+            task_payload["media_path"] = item.media_path
+        if item.media_url:
+            task_payload["media_url"] = item.media_url
+        if not task_payload.get("media_path") and not task_payload.get("media_url"):
+            continue
+        task_create = TaskCreate(
+            account_id=account_id,
+            task_type=task_type,
+            target=None,
+            payload=task_payload,
+            scheduled_time=scheduled_time,
+        )
+        task = await SchedulerService.create_and_enqueue(db, task_create)
+        created.append(task)
+    return [TaskResponse.model_validate(t) for t in created]
+
+
+@router.post("/bulk-view-story", response_model=list[TaskResponse])
+async def bulk_view_story(
+    payload: BulkViewStoryCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[TaskResponse]:
+    """Create one VIEW_STORY task per account for the given username (warm-up / engagement)."""
+    result = await db.execute(
+        select(InstagramAccount.id).where(InstagramAccount.user_id == normalize_id(user.id))
+    )
+    account_ids = [row[0] for row in result.all()]
+    if not account_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No accounts found")
+    target = payload.target.strip().lstrip("@")
+    if not target:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username required")
+    testing = get_testing_mode()
+    created = []
+    now = datetime.now(timezone.utc)
+    for account_id in account_ids:
+        if not testing and not await can_perform_action(db, account_id, Task.VIEW_STORY):
+            continue
+        delta_sec = 0 if testing else random.randint(0, 6 * 3600)
+        scheduled_time = None if testing else now + timedelta(seconds=delta_sec)
+        task_create = TaskCreate(
+            account_id=account_id,
+            task_type=Task.VIEW_STORY,
+            target=target,
+            scheduled_time=scheduled_time,
+        )
+        task = await SchedulerService.create_and_enqueue(db, task_create)
+        created.append(task)
     return [TaskResponse.model_validate(t) for t in created]
 
 

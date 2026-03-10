@@ -10,7 +10,9 @@ const TASK_TYPES = [
   { value: "LIKE_POST", label: "Like post" },
   { value: "SEND_DM", label: "Send DM" },
   { value: "UPLOAD_POST", label: "Upload post" },
+  { value: "UPLOAD_REEL", label: "Upload reel" },
   { value: "VIEW_REEL", label: "View reel" },
+  { value: "VIEW_STORY", label: "View story" },
 ];
 
 export default function AutomationPage() {
@@ -32,6 +34,9 @@ export default function AutomationPage() {
   const [bulkReelViewsPerAccount, setBulkReelViewsPerAccount] = useState(1);
   const [bulkReelLoading, setBulkReelLoading] = useState(false);
   const [bulkReelMessage, setBulkReelMessage] = useState("");
+  const [bulkStoryTarget, setBulkStoryTarget] = useState("");
+  const [bulkStoryLoading, setBulkStoryLoading] = useState(false);
+  const [bulkStoryMessage, setBulkStoryMessage] = useState("");
   const [error, setError] = useState("");
   const [testingMode, setTestingMode] = useState(false);
   const [testingModeLoading, setTestingModeLoading] = useState(false);
@@ -229,6 +234,31 @@ export default function AutomationPage() {
     }
   };
 
+  const handleBulkViewStory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const username = bulkStoryTarget.trim().replace(/^@/, "");
+    if (!username) {
+      setBulkStoryMessage("Enter a username");
+      return;
+    }
+    setError("");
+    setBulkStoryMessage("");
+    setBulkStoryLoading(true);
+    try {
+      const { data: created } = await tasks.bulkViewStory(username);
+      setBulkStoryTarget("");
+      setBulkStoryMessage(`Created ${created.length} view-story task(s) for @${username}.`);
+      fetchData();
+    } catch (err: unknown) {
+      const msg = err && typeof err === "object" && "response" in err
+        ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : "Bulk view story failed";
+      setBulkStoryMessage(Array.isArray(msg) ? msg[0] : String(msg));
+    } finally {
+      setBulkStoryLoading(false);
+    }
+  };
+
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -389,6 +419,33 @@ export default function AutomationPage() {
             {bulkReelLoading ? "Creating…" : "▶️ View reel with all accounts"}
           </button>
           {bulkReelMessage && <p className="w-full text-sm text-slate-600">{bulkReelMessage}</p>}
+        </form>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 className="text-lg font-medium text-slate-900">📖 View story with all accounts</h2>
+        <p className="mt-1 text-sm text-slate-600">
+          Create one view-story task per account (warm-up / engagement). Tasks are spread over the next 6h (or instant in testing mode).
+        </p>
+        <form className="mt-4 flex flex-wrap items-end gap-3" onSubmit={handleBulkViewStory}>
+          <div className="min-w-[200px]">
+            <label className="block text-sm font-medium text-slate-700">Username whose story to view</label>
+            <input
+              type="text"
+              value={bulkStoryTarget}
+              onChange={(e) => setBulkStoryTarget(e.target.value)}
+              className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              placeholder="@username or username"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={bulkStoryLoading || accountList.length === 0}
+            className="rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60"
+          >
+            {bulkStoryLoading ? "Creating…" : "📖 View story with all accounts"}
+          </button>
+          {bulkStoryMessage && <p className="text-sm text-slate-600">{bulkStoryMessage}</p>}
         </form>
       </div>
 

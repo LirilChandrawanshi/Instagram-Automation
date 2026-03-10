@@ -94,6 +94,25 @@ export const tasks = {
     api.post<Task[]>("/tasks/bulk-comment", { target, message }),
   bulkViewReel: (target: string, viewsPerAccount?: number) =>
     api.post<Task[]>("/tasks/bulk-view-reel", { target, views_per_account: viewsPerAccount ?? 1 }),
+  bulkViewStory: (target: string) =>
+    api.post<Task[]>("/tasks/bulk-view-story", { target: target.replace(/^@/, "") }),
+  uploadMedia: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.post<{ media_path: string }>("/tasks/upload-media", form, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
+  bulkSchedulePosts: (data: {
+    account_id: string;
+    items: Array<{
+      scheduled_time: string;
+      media_type: "image" | "video";
+      media_url?: string;
+      media_path?: string;
+      caption: string;
+    }>;
+  }) => api.post<Task[]>("/tasks/bulk-schedule-posts", data),
   delete: (id: string) => api.delete(`/tasks/${id}`),
 };
 
@@ -148,6 +167,17 @@ export interface AnalyticsOverview {
   tasks_by_type: Record<string, number>;
 }
 
+export interface CommentDmEvent {
+  comment_id: string;
+  comment_text: string;
+  media_id: string;
+  created_at: string;
+}
+
 export const analytics = {
   overview: () => api.get<AnalyticsOverview>("/analytics/overview"),
+  commentDm: (limit?: number) =>
+    api.get<{ total_sent: number; recent: CommentDmEvent[] }>("/analytics/comment-dm", {
+      params: limit ? { limit } : undefined,
+    }),
 };

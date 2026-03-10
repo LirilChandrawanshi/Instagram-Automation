@@ -51,6 +51,29 @@ class BulkViewReelCreate(BaseModel):
     views_per_account: int = 1  # how many view tasks to create per account (1 = one view per account)
 
 
+class BulkViewStoryCreate(BaseModel):
+    """Payload to create view-story tasks (one per account per username)."""
+
+    target: str  # username whose story to view (without @)
+
+
+class SchedulePostItem(BaseModel):
+    """One scheduled post or reel in bulk schedule."""
+
+    scheduled_time: datetime
+    media_type: str  # "image" | "video"
+    media_url: Optional[str] = None  # public URL (worker will download)
+    media_path: Optional[str] = None  # from upload-media endpoint (relative path)
+    caption: str = ""
+
+
+class BulkSchedulePostsCreate(BaseModel):
+    """Bulk schedule posts/reels for one account."""
+
+    account_id: UUID
+    items: list[SchedulePostItem]
+
+
 class TaskResponse(BaseModel):
     """Task in API responses. Datetimes are serialized as UTC (Z) for correct local display."""
 

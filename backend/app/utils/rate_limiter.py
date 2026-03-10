@@ -3,6 +3,7 @@ Daily action limits per account to simulate human behavior.
 Uses in-memory or Redis-backed counters; here we use DB for simplicity.
 """
 from datetime import date, datetime
+from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -12,7 +13,7 @@ from app.config import get_settings
 from app.models.task import Task
 
 
-def _get_limit(task_type: str) -> int | None:
+def _get_limit(task_type: str) -> Optional[int]:
     """Return daily limit for task_type (fresh from settings). None = no limit."""
     settings = get_settings()
     limits = {
@@ -22,6 +23,8 @@ def _get_limit(task_type: str) -> int | None:
         Task.COMMENT_POST: settings.daily_limit_comments,
         Task.UPLOAD_POST: 10,
         Task.VIEW_REEL: getattr(settings, "daily_limit_reel_views", 9999),
+        Task.VIEW_STORY: getattr(settings, "daily_limit_story_views", 30),
+        Task.UPLOAD_REEL: 5,  # reels per account per day
     }
     return limits.get(task_type)
 

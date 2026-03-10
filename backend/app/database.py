@@ -46,6 +46,23 @@ async def ensure_comment_dm_sent_table() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    def _add_comment_dm_columns_if_missing(sync_conn):
+        from sqlalchemy import text
+        is_sqlite = "sqlite" in str(sync_conn.engine.url)
+        for col, col_type in [("comment_text", "TEXT"), ("media_id", "VARCHAR(128)")]:
+            if is_sqlite:
+                cursor = sync_conn.execute(text("PRAGMA table_info(comment_dm_sent)"))
+                rows = cursor.fetchall()
+                has_col = any(r[1] == col for r in rows)
+                if not has_col:
+                    sync_conn.execute(text(f"ALTER TABLE comment_dm_sent ADD COLUMN {col} {col_type}"))
+            else:
+                sync_conn.execute(text(
+                    f"ALTER TABLE comment_dm_sent ADD COLUMN IF NOT EXISTS {col} {col_type}"
+                ))
+    async with engine.begin() as conn:
+        await conn.run_sync(_add_comment_dm_columns_if_missing)
+
 
 async def ensure_comment_dm_enabled_post_table() -> None:
     """Create comment_dm_enabled_post table if missing (Comment-to-DM per-post allowlist)."""

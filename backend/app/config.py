@@ -93,6 +93,8 @@ class Settings(BaseSettings):
     # App
     app_name: str = "Instagram Automation API"
     debug: bool = False
+    # CORS: comma-separated origins (e.g. https://app.example.com,https://www.example.com)
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     # Database (set USE_SQLITE=1 for local dev without PostgreSQL)
     use_sqlite: bool = False
@@ -119,6 +121,7 @@ class Settings(BaseSettings):
     daily_limit_dms: int = 20
     daily_limit_comments: int = 10
     daily_limit_reel_views: int = 9999  # per account per day; one account can produce many views
+    daily_limit_story_views: int = 30  # per account per day (warm-up / engagement)
 
     # Delay between actions (seconds) to mimic human behavior
     delay_between_actions_min_sec: int = 20
